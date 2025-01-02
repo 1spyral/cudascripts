@@ -3,7 +3,7 @@ CXX = g++
 NVCC = nvcc
 CXXFLAGS = -Wall -O3 -g -I./include -I/usr/local/include/opencv4
 CUDAFLAGS = -I./include -I/usr/local/include/opencv4 -arch=sm_75
-LDFLAGS = -L/usr/local/lib -Wl,-rpath,/usr/local/lib -lopencv_core -lopencv_imgcodecs -lopencv_highgui -lcudart
+LDFLAGS = -L/usr/local/lib -lcudart -lopencv_core -lopencv_highgui -lopencv_imgcodecs
 
 # Directories
 SRC_DIR = src
@@ -34,8 +34,7 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cu
 
 # Clean up
 clean:
-	rm -rf $(BUILD_DIR)/*.o $(EXEC)
+	rm -f $(BUILD_DIR)/*.o $(EXEC)
 
 # Phony targets
 .PHONY: all clean
-
