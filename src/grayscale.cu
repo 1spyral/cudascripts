@@ -15,17 +15,15 @@ __device__ float linearize(float gamma);
 __device__ float convertToGamma(float linear);
 __device__ inline float scale1(uint8_t x);
 __device__ inline uint8_t scale255(float x);
-uint8_t* flatten(cv::Mat &p_img);
-bool unflatten(cv::Mat &out, uint8_t* p_img, size_t rows, size_t cols);
 
-__global__ void greyscaleKernel(uint8_t* d_out, uint8_t* d_in, size_t size) {
+__global__ void grayscaleKernel(uint8_t* d_out, uint8_t* d_in, size_t size) {
     size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
     if (idx >= size) {
         return;
     }
-    float r = scale1(d_in[idx * 3]);
+    float b = scale1(d_in[idx * 3]);
     float g = scale1(d_in[idx * 3 + 1]);
-    float b = scale1(d_in[idx * 3 + 2]);
+    float r = scale1(d_in[idx * 3 + 2]);
 
     float linearR = linearize(r);
     float linearG = linearize(g);
@@ -36,12 +34,12 @@ __global__ void greyscaleKernel(uint8_t* d_out, uint8_t* d_in, size_t size) {
     d_out[idx] = intensity;
 }
 
-cudaError_t greyscaleParallel(cv::Mat &h_out, cv::Mat &h_in) {
+cudaError_t grayscaleParallel(cv::Mat &h_out, cv::Mat &h_in) {
     cudaError_t cudaStatus;
 
     size_t size = sizeInPixels(h_in);
 
-    uint8_t* h_arr_in = flatten(h_in);
+    uint8_t* h_arr_in = flattenColor(h_in);
     uint8_t* h_arr_out = new uint8_t[size];
 
     uint8_t* d_arr_in;
@@ -68,17 +66,17 @@ cudaError_t greyscaleParallel(cv::Mat &h_out, cv::Mat &h_in) {
         goto Error;
     }
 
-    greyscaleKernel<<<blocksPerGrid, threadsPerBlock>>>(d_arr_out, d_arr_in, size);
+    grayscaleKernel<<<blocksPerGrid, threadsPerBlock>>>(d_arr_out, d_arr_in, size);
 
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "greyscaleKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        fprintf(stderr, "grayscaleKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
         goto Error;
     }
 
     cudaStatus = cudaDeviceSynchronize();
     if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching greyscaleKernel!\n", cudaStatus);
+        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching grayscaleKernel!\n", cudaStatus);
         goto Error;
     }
 
@@ -119,32 +117,12 @@ __device__ inline uint8_t scale255(float x) {
     return (uint8_t)(x * 255);
 }
 
-
-uint8_t* flatten(cv::Mat &p_img) {
-    uint8_t* out = new uint8_t[sizeInPixels(p_img) * 3];
-    for (int row = 0; row < p_img.rows; row++) {
-        for (int col = 0; col < p_img.cols; col++) {
-            int idx = col + row * p_img.cols;
-            cv::Vec3b pixel = p_img.at<cv::Vec3b>(row, col);
-            out[3 * idx] = pixel[0];
-            out[3 * idx + 1] = pixel[1];
-            out[3 * idx + 2] = pixel[2];
-        }
-    }
-    return out;
-}
-
-bool unflatten(cv::Mat &out, uint8_t* p_img, size_t rows, size_t cols) {
-    out = cv::Mat(rows, cols, CV_8UC1, p_img);
-    return true;
-}
-
 /*
 int main() {
 	std::string PATH = "images/starrynight.jpg";
 	cv::Mat img = getImage(PATH);
 	previewImage(img, 500, 500);
-	greyscaleParallel(img, img);
+	grayscaleParallel(img, img);
 	previewImage(img, 500, 500);
 }
 */

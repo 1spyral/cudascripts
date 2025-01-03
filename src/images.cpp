@@ -30,3 +30,17 @@ size_t sizeInPixels(cv::Mat &img) {
 size_t sizeInPixels(cv::Mat *img) {
     return sizeInPixels(*img);
 }
+
+uint8_t* flattenColor(cv::Mat &p_img) {
+    uint8_t* out = new uint8_t[sizeInPixels(p_img) * 3];
+    for (int row = 0; row < p_img.rows; row++) {
+        for (int col = 0; col < p_img.cols; col++) {
+            int idx = col + row * p_img.cols;
+            cv::Vec3b pixel = p_img.at<cv::Vec3b>(row, col);
+            out[3 * idx] = pixel[0];
+            out[3 * idx + 1] = pixel[1];
+            out[3 * idx + 2] = pixel[2];
+        }
+    }
+    return out;
+}

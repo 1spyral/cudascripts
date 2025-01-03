@@ -88,3 +88,16 @@ extern inline size_t sizeInPixels(cv::Mat* img) {
  * @return size_t The total number of pixels in the image.
  */
 size_t sizeInPixels(cv::Mat* img);
+
+/**
+ * @brief Flattens a color image into a 1D array.
+ * 
+ * This function takes a color image (cv::Mat) and flattens it into a 1D array
+ * of uint8_t values. Each pixel is represented by three consecutive values
+ * corresponding to the B, G, and R channels.
+ * 
+ * @param p_img Reference to the cv::Mat object containing the color image.
+ * @return uint8_t* Pointer to the flattened 1D array. The caller is responsible
+ * for deleting this array to avoid memory leaks.
+ */
+uint8_t* flattenColor(cv::Mat &p_img);
