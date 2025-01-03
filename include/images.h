@@ -96,8 +96,8 @@ size_t sizeInPixels(cv::Mat* img);
  * of uint8_t values. Each pixel is represented by three consecutive values
  * corresponding to the B, G, and R channels.
  * 
- * @param p_img Reference to the cv::Mat object containing the color image.
- * @return uint8_t* Pointer to the flattened 1D array. The caller is responsible
- * for deleting this array to avoid memory leaks.
+ * @param img_out Pointer to the output 1D array where the flattened image will be stored.
+ * @param img_in Reference to the cv::Mat object containing the color image.
+ * @return size_t The size of the flattened 1D array.
  */
-uint8_t* flattenColor(cv::Mat &p_img);
+size_t flattenColor(uint8_t* &img_out, cv::Mat &img_in);

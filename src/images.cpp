@@ -31,16 +31,17 @@ size_t sizeInPixels(cv::Mat *img) {
     return sizeInPixels(*img);
 }
 
-uint8_t* flattenColor(cv::Mat &p_img) {
-    uint8_t* out = new uint8_t[sizeInPixels(p_img) * 3];
-    for (int row = 0; row < p_img.rows; row++) {
-        for (int col = 0; col < p_img.cols; col++) {
-            int idx = col + row * p_img.cols;
-            cv::Vec3b pixel = p_img.at<cv::Vec3b>(row, col);
-            out[3 * idx] = pixel[0];
-            out[3 * idx + 1] = pixel[1];
-            out[3 * idx + 2] = pixel[2];
+size_t flattenColor(uint8_t* &img_out, cv::Mat &img_in) {
+    size_t size = sizeInPixels(img_in) * 3;
+    img_out = new uint8_t[size];
+    for (int row = 0; row < img_in.rows; row++) {
+        for (int col = 0; col < img_in.cols; col++) {
+            int idx = col + row * img_in.cols;
+            cv::Vec3b pixel = img_in.at<cv::Vec3b>(row, col);
+            img_out[3 * idx] = pixel[0];
+            img_out[3 * idx + 1] = pixel[1];
+            img_out[3 * idx + 2] = pixel[2];
         }
     }
-    return out;
+    return size;
 }
