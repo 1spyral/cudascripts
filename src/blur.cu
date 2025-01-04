@@ -53,8 +53,8 @@ __global__ void unweightedBlurKernel(u_int8_t* d_out, u_int8_t* d_in, int width,
     int sumR = 0;
     int count = 0;
 
-    for (int i = threadIdx.x; i < threadIdx.x + 2 * radius; i++) {
-        for (int j = threadIdx.y; j < threadIdx.y + 2 * radius; j++) {
+    for (int j = threadIdx.y; j < threadIdx.y + 2 * radius + 1; j++) {
+        for (int i = threadIdx.x; i < threadIdx.x + 2 * radius + 1; i++) {
             if (pixels[(i + j * side_length) * 3] == -1) {
                 continue;
             }
@@ -112,13 +112,13 @@ __global__ void gaussianBlurKernel(u_int8_t* d_out, u_int8_t* d_in, size_t width
     float sumR = 0;
     float weight = 0;
 
-    for (int i = threadIdx.x; i < threadIdx.x + 2 * radius; i++) {
-        for (int j = threadIdx.y; j < threadIdx.y + 2 * radius; j++) {
+    for (int j = threadIdx.y; j < threadIdx.y + 2 * radius + 1; j++) {
+        for (int i = threadIdx.x; i < threadIdx.x + 2 * radius + 1; i++) {
             if (pixels[(i + j * side_length) * 3] == -1) {
                 continue;
             }
-            float x_offset = threadIdx.x + radius - i;
-            float y_offset = threadIdx.y + radius - j;
+            int x_offset = threadIdx.x + radius - i;
+            int y_offset = threadIdx.y + radius - j;
             float gaussian_weight = 1.0 / (2 * M_PI * sigma * sigma) * exp(-(x_offset * x_offset + y_offset * y_offset) / (2 * sigma * sigma)); 
 
             sumB += pixels[(i + j * side_length) * 3] * gaussian_weight;
