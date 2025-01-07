@@ -5,6 +5,8 @@
 
 #define MAX_PER_BLOCK 1024
 
+cudaError_t psaParallelHS(int* out, int* in, size_t size, bool inclusive = false, bool recursive = false);
+
 __global__ void psaHSKernel(int* d_out, int* d_in, int* d_offset, size_t size, bool inclusive) {
     __shared__ int psa[MAX_PER_BLOCK];
 
@@ -24,14 +26,17 @@ __global__ void psaHSKernel(int* d_out, int* d_in, int* d_offset, size_t size, b
     size_t step = 1;
 
     if (steps == 0) {
+        int val = d_in[global_idx];
         if (inclusive) {
-            int val = d_in[global_idx];
             d_out[global_idx] = val;
             if (blockIdx.x != (size + MAX_PER_BLOCK - 1) / MAX_PER_BLOCK - 1) {
                 d_offset[global_idx] = val;
             }
         } else {
             d_out[global_idx] = 0;
+            if (blockIdx.x != (size + MAX_PER_BLOCK - 1) / MAX_PER_BLOCK - 1) {
+                d_offset[global_idx] = val;
+            }
         }
         return;
     }
@@ -108,7 +113,7 @@ __global__ void psaHSKernel(int* d_out, int* d_in, int* d_offset, size_t size, b
         if (inclusive) {
             d_offset[blockIdx.x] = output;
         } else {
-            d_offset[blockIdx.x] = output + psa[idx];
+            d_offset[blockIdx.x] = psa[idx] + psa[idx - step];
         }
     }
 }
@@ -132,7 +137,11 @@ __global__ void addKernel(int* d_arr, int* d_in, int* d_offset, bool inclusive) 
     d_arr[global_idx] += addend;
 }
 
-cudaError_t psaParallelHS(int* out, int* in, size_t size, bool inclusive = false, bool recursive = false) {
+cudaError_t psaParallelHS(int* out, int* in, size_t size, bool inclusive = false) {
+    return psaParallelHS(out, in, size, inclusive, false);
+}
+
+cudaError_t psaParallelHS(int* out, int* in, size_t size, bool inclusive, bool recursive) {
     cudaError_t cudaStatus;
 
     int blocks = (size + MAX_PER_BLOCK - 1) / MAX_PER_BLOCK;

@@ -12,7 +12,7 @@
  * @param inclusive Boolean flag indicating whether the scan should be inclusive or exclusive. Default is false (exclusive).
  * @return cudaError_t CUDA error code indicating the success or failure of the operation.
  */
-cudaError_t psaParallelHS(int* out, int* in, size_t size, bool inclusive = false, bool recursive = false);
+cudaError_t psaParallelHS(int* out, int* in, size_t size, bool inclusive = false);
 
 /**
  * @brief Performs a parallel prefix sum (scan) using the Blelloch algorithm.
