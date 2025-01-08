@@ -6,6 +6,7 @@
 #define MAX_PER_BLOCK 1024
 
 cudaError_t psaParallelHS(int* out, int* in, size_t size, bool inclusive = false, bool recursive = false);
+cudaError_t psaParallelB(int* out, int* in, size_t size, bool inclusive = false, bool recursive = false);
 
 __global__ void psaHSKernel(int* d_out, int* d_in, int* d_offset, size_t size, bool inclusive) {
     __shared__ int psa[MAX_PER_BLOCK];
@@ -40,7 +41,7 @@ __global__ void psaHSKernel(int* d_out, int* d_in, int* d_offset, size_t size, b
         }
         return;
     }
-    else if (steps == 1) {
+    if (steps == 1) {
         int output = 0;
         if (idx < 2) {
             if (inclusive) {
@@ -78,8 +79,8 @@ __global__ void psaHSKernel(int* d_out, int* d_in, int* d_offset, size_t size, b
 
     for (i = 2; i < steps; i++) {
         int addend;
+        step <<= 1;
         if (idx < block_size) {
-            step <<= 1;
             addend = idx < step ? 0 : psa[idx - step];
         }
         __syncthreads();
@@ -119,8 +120,135 @@ __global__ void psaHSKernel(int* d_out, int* d_in, int* d_offset, size_t size, b
 }
 
 __global__ void psaBKernel(int* d_out, int* d_in, int* d_offset, size_t size, bool inclusive) {
-    extern __shared__ int psa[];
+    __shared__ int psa[MAX_PER_BLOCK];
 
+    size_t idx = threadIdx.x;
+    size_t global_idx = blockIdx.x * MAX_PER_BLOCK + idx;
+
+    size_t block_size = MAX_PER_BLOCK;
+    if (blockIdx.x == (size + MAX_PER_BLOCK - 1) / MAX_PER_BLOCK - 1) {
+        block_size = size % MAX_PER_BLOCK;
+        if (block_size == 0) {
+            block_size = MAX_PER_BLOCK;
+        }
+    }
+
+    size_t steps = ceil(log2f(block_size));
+    size_t i = 1;
+    size_t step = 2;
+    size_t half_step = 1;
+
+    if (steps == 0) {
+        int val = d_in[global_idx];
+        if (inclusive) {
+            d_out[global_idx] = val;
+            if (blockIdx.x != (size + MAX_PER_BLOCK - 1) / MAX_PER_BLOCK - 1) {
+                d_offset[global_idx] = val;
+            }
+        } else {
+            d_out[global_idx] = 0;
+            if (blockIdx.x != (size + MAX_PER_BLOCK - 1) / MAX_PER_BLOCK - 1) {
+                d_offset[global_idx] = val;
+            }
+        }
+        return;
+    }
+    if (steps == 1) {
+        int output = 0;
+        if (idx < 2) {
+            if (inclusive) {
+                output += d_in[blockIdx.x * MAX_PER_BLOCK];
+                if (idx == 1) {
+                    output += d_in[global_idx];
+                    if (blockIdx.x != (size + MAX_PER_BLOCK - 1) / MAX_PER_BLOCK - 1) {
+                        d_offset[blockIdx.x] = output;
+                    }
+                }
+            } else {
+                if (idx == 1) {
+                    output += d_in[blockIdx.x * MAX_PER_BLOCK];
+                    if (blockIdx.x != (size + MAX_PER_BLOCK - 1) / MAX_PER_BLOCK - 1) {
+                        d_offset[blockIdx.x] = output + d_in[global_idx];
+                    }
+                }
+            }
+        }
+        __syncthreads();
+        if (idx < 2) {
+            d_out[global_idx] = output;
+        }
+        return;
+    }
+
+    // Reduction
+    if (idx < block_size) {
+        int output = d_in[global_idx];
+        if (idx & (step - 1) == half_step) {
+            output += d_in[global_idx - half_step];
+        }
+        psa[idx] = output;
+    }
+    __syncthreads();
+
+    for (i = 2; i <= steps; i++) {
+        int addend;
+        step <<= 1;
+        half_step <<= 1;
+        if (idx < block_size) {
+            addend = (((idx + 1) & (step - 1)) == 0) ? psa[idx - half_step] : 0;
+        }
+        __syncthreads();
+        if (idx < block_size) {
+            psa[idx] += addend;
+        }
+        __syncthreads();
+    }
+    if (idx < block_size) {
+        d_out[global_idx] = psa[idx];
+    }
+    return;
+    // Downsweep
+    if (idx == block_size - 1) {
+        psa[idx] = 0;
+    }
+    __syncthreads();
+    int output;
+    for (i--; i > 1; i--) {
+        if (idx < block_size) {
+            if ((idx + 1) & (step - 1) == 0) {
+                output = psa[idx] + psa[idx - half_step];
+            } else if ((idx + 1) & (step - 1) == half_step) {
+                output = psa[idx + half_step];
+            } else {
+                output = psa[idx];
+            }
+        }
+        __syncthreads();
+        if (idx < block_size) {
+            psa[idx] = output;
+        }
+        __syncthreads();
+        step >>= 0;
+        half_step >>= 0;
+    }
+    
+    if (idx < block_size) {
+        if (inclusive) {
+            if (idx % (step - 1) == 0) {
+
+            }
+        } else {
+            if ((idx + 1) & (step - 1) == 0) {
+                output = psa[idx] + psa[idx - half_step];
+            } else {
+                output = psa[idx + half_step];
+            }
+        }
+    }
+    __syncthreads();
+    if (idx < block_size) {
+        psa[idx] = output;
+    }
 }
 
 __global__ void addKernel(int* d_arr, int* d_in, int* d_offset, bool inclusive) {
@@ -171,7 +299,7 @@ cudaError_t psaParallelHS(int* out, int* in, size_t size, bool inclusive, bool r
 
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "psaParallelHSKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        fprintf(stderr, "psaHSKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
         goto Exit;
     }
 
@@ -219,15 +347,83 @@ Exit:
 }
 
 cudaError_t psaParallelB(int* out, int* in, size_t size, bool inclusive = false) {
+    return psaParallelB(out, in, size, inclusive, false);
+}
+
+cudaError_t psaParallelB(int* out, int* in, size_t size, bool inclusive, bool recursive) {
     cudaError_t cudaStatus;
 
-    if (size == 0) {
+    int blocks = (size + MAX_PER_BLOCK - 1) / MAX_PER_BLOCK;
+
+    if (blocks == 0) {
         out = 0;
         goto Exit;
     }
 
-Exit:
+    int* d_out;
+    int* d_in;
+    int* d_offset;
 
+    if (recursive) {
+        d_out = out;
+        d_in = in;
+    } else {
+        cudaStatus = cudaMalloc((void**) &d_out, size * sizeof(int));
+        cudaStatus = cudaMalloc((void**) &d_in, size * sizeof(int));
+        
+        cudaStatus = cudaMemcpy(d_in, in, size * sizeof(int), cudaMemcpyHostToDevice);
+    }
+
+    cudaStatus = cudaMalloc((void**) &d_offset, (blocks - 1) * sizeof(int));
+    
+    psaBKernel<<<blocks, MAX_PER_BLOCK>>>(d_out, d_in, d_offset, size, inclusive);
+
+    cudaStatus = cudaGetLastError();
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "psaBKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        goto Exit;
+    }
+
+    cudaStatus = cudaDeviceSynchronize();
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaDeviceSynchronize returned error code %d: %s\n", cudaStatus, cudaGetErrorString(cudaStatus));
+        goto Exit;
+    }
+    if (false) {
+    if (blocks > 2) {
+        cudaStatus = psaParallelB(d_offset, d_offset, blocks - 1, true, true);
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "Recursive psaParallelB failed: %s\n", cudaGetErrorString(cudaStatus));
+            goto Exit;
+        }
+    }
+
+    if (blocks > 1) {
+        addKernel<<<blocks - 1, MAX_PER_BLOCK>>>(d_out, d_in, d_offset, inclusive);
+
+        cudaStatus = cudaGetLastError();
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+            goto Exit;
+        }
+    }
+    
+    cudaStatus = cudaDeviceSynchronize();
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaDeviceSynchronize returned error code %d: %s\n", cudaStatus, cudaGetErrorString(cudaStatus));
+        goto Exit;
+    }
+    }
+    if (!recursive) {
+        cudaStatus = cudaMemcpy(out, d_out, size * sizeof(int), cudaMemcpyDeviceToHost);
+    }
+    
+Exit:
+    if (!recursive) {
+        cudaFree(d_out);
+        cudaFree(d_in);
+    }
+    cudaFree(d_offset);
     return cudaStatus;
 }
 
