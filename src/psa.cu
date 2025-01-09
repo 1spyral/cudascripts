@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 
+// Note: if customizing MAX_PER_BLOCK, Blelloch only works with powers of 2 (binary tree)
 #define MAX_PER_BLOCK 1024
 
 cudaError_t psaParallelHS(int* out, int* in, size_t size, bool inclusive = false, bool recursive = false);
@@ -134,6 +135,7 @@ __global__ void psaBKernel(int* d_out, int* d_in, int* d_offset, size_t size, bo
     }
 
     size_t steps = ceil(log2f(block_size));
+    size_t sweep_size = 1 << steps;
     size_t i = 1;
     size_t step = 2;
     size_t half_step = 1;
@@ -181,9 +183,12 @@ __global__ void psaBKernel(int* d_out, int* d_in, int* d_offset, size_t size, bo
     }
 
     // Reduction
-    if (idx < block_size) {
-        int output = d_in[global_idx];
-        if (idx & (step - 1) == half_step) {
+    if (idx < sweep_size) {
+        int output = 0;
+        if (idx < block_size) {
+            output = d_in[global_idx];
+        }
+        if (idx & (step - 1) == half_step && idx < block_size) {
             output += d_in[global_idx - half_step];
         }
         psa[idx] = output;
@@ -194,51 +199,52 @@ __global__ void psaBKernel(int* d_out, int* d_in, int* d_offset, size_t size, bo
         int addend;
         step <<= 1;
         half_step <<= 1;
-        if (idx < block_size) {
+        if (idx < sweep_size) {
             addend = (((idx + 1) & (step - 1)) == 0) ? psa[idx - half_step] : 0;
         }
         __syncthreads();
-        if (idx < block_size) {
+        if (idx < sweep_size) {
             psa[idx] += addend;
         }
         __syncthreads();
     }
-    if (idx < block_size) {
-        d_out[global_idx] = psa[idx];
-    }
-    return;
+
     // Downsweep
-    if (idx == block_size - 1) {
+    if (idx == sweep_size - 1) {
         psa[idx] = 0;
     }
     __syncthreads();
     int output;
     for (i--; i > 1; i--) {
-        if (idx < block_size) {
-            if ((idx + 1) & (step - 1) == 0) {
+        if (idx < sweep_size) {
+            if (((idx + 1) & (step - 1)) == 0) {
                 output = psa[idx] + psa[idx - half_step];
-            } else if ((idx + 1) & (step - 1) == half_step) {
+            } else if (((idx + 1) & (step - 1)) == half_step) {
                 output = psa[idx + half_step];
             } else {
                 output = psa[idx];
             }
         }
         __syncthreads();
-        if (idx < block_size) {
+        if (idx < sweep_size) {
             psa[idx] = output;
         }
         __syncthreads();
-        step >>= 0;
-        half_step >>= 0;
+        step >>= 1;
+        half_step >>= 1;
     }
-    
+
     if (idx < block_size) {
         if (inclusive) {
-            if (idx % (step - 1) == 0) {
-
+            if (idx == sweep_size - 1) {
+                output = psa[idx - 1] + psa[idx] + d_in[global_idx];
+            } else if (idx % 2 == 0) {
+                output = psa[idx] + psa[idx + 1];
+            } else {
+                output = psa[idx + 2];
             }
         } else {
-            if ((idx + 1) & (step - 1) == 0) {
+            if (((idx + 1) & (step - 1)) == 0) {
                 output = psa[idx] + psa[idx - half_step];
             } else {
                 output = psa[idx + half_step];
@@ -247,7 +253,14 @@ __global__ void psaBKernel(int* d_out, int* d_in, int* d_offset, size_t size, bo
     }
     __syncthreads();
     if (idx < block_size) {
-        psa[idx] = output;
+        d_out[global_idx] = output;
+        if (idx == block_size - 1 && blockIdx.x != (size + MAX_PER_BLOCK - 1) / MAX_PER_BLOCK - 1) {
+            if (inclusive) {
+                d_offset[blockIdx.x] = output;
+            } else {
+                d_offset[blockIdx.x] = output + d_in[global_idx];
+            }
+        }
     }
 }
 
@@ -389,7 +402,7 @@ cudaError_t psaParallelB(int* out, int* in, size_t size, bool inclusive, bool re
         fprintf(stderr, "cudaDeviceSynchronize returned error code %d: %s\n", cudaStatus, cudaGetErrorString(cudaStatus));
         goto Exit;
     }
-    if (false) {
+
     if (blocks > 2) {
         cudaStatus = psaParallelB(d_offset, d_offset, blocks - 1, true, true);
         if (cudaStatus != cudaSuccess) {
@@ -413,7 +426,7 @@ cudaError_t psaParallelB(int* out, int* in, size_t size, bool inclusive, bool re
         fprintf(stderr, "cudaDeviceSynchronize returned error code %d: %s\n", cudaStatus, cudaGetErrorString(cudaStatus));
         goto Exit;
     }
-    }
+
     if (!recursive) {
         cudaStatus = cudaMemcpy(out, d_out, size * sizeof(int), cudaMemcpyDeviceToHost);
     }
@@ -437,6 +450,21 @@ int main() {
 	}
 	printArray(in, size);
 	psaParallelHS(out, in, size, false);
+	printArray(out, size);
+}
+*/
+/*
+int main() {
+	int size = 30;
+	int in[size];
+	int out[size];
+	for (int i = 1; i <= size; i++) {
+		in[i - 1] = i;
+	}
+	printArray(in, size);
+	psaParallelB(out, in, size, false);
+	printArray(out, size);
+	psaParallelB(out, in, size, true);
 	printArray(out, size);
 }
 */
