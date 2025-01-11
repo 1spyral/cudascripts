@@ -15,47 +15,44 @@ __global__ void histogramAtomicKernel(int* d_out, int* d_in, int min, int max, s
     }
 }
 
-// first implement for 1024 threads max
 __global__ void histogramReductionKernel(int* d_out, int* d_in, int min, int max, size_t bin_count, size_t size, size_t load) {
     extern __shared__ int shared[];
 
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    if (idx < size) {
-        for (int i = 0; i < bin_count; i++) {
-            shared[i + bin_count * idx] = 0;
-        }
-    }
-
-    if (idx < size) {
-        for (int i = idx * load; i < (idx + 1) * load && i < size; i++) {
-            shared[findBin(min, max, bin_count, d_in[i]) + bin_count * idx] += 1;
-        }
-    }
 
     size_t threads = (size + load - 1) / load;
-
-    size_t steps = ceil(log2f(threads));
+    int blocks = (threads + MAX_PER_BLOCK - 1) / MAX_PER_BLOCK;
+    int block_size = MAX_PER_BLOCK;
+    if (blockIdx.x == blocks - 1) {
+        block_size = threads - (gridDim.x - 1) * block_size;
+    }
     
+    if (idx < threads) {
+        for (int i = idx * load; i < (idx + 1) * load && i < size; i++) {
+            shared[findBin(min, max, bin_count, d_in[i]) + bin_count * threadIdx.x] += 1;
+        }
+    }
+
+    size_t steps = ceil(log2f(block_size));
     for (int i = 0; i < bin_count; i++) {
-        if (steps == 0) {
-            d_out[i] = shared[i + bin_count * idx];
-            return;
+        if (steps == 0 && idx < threads) {
+            atomicAdd(&d_out[i], shared[i + bin_count * threadIdx.x]);
+            continue;
         }
         int step = 2;
         int half_step = 1;
 
         __syncthreads();
         for (int j = 1; j < steps; j++) {
-            if ((idx & (step - 1)) == 0) {
-                shared[i + bin_count * idx] += shared[i + bin_count * (idx + half_step)];
+            if ((threadIdx.x & (step - 1)) == 0 && threadIdx.x < threads) {
+                shared[i + bin_count * threadIdx.x] += shared[i + bin_count * (threadIdx.x + half_step)];
             }
             step <<= 1;
             half_step <<= 1;
             __syncthreads();
         }
-        if (idx == 0) {
-            d_out[i] += shared[i + bin_count * idx] + shared[i + bin_count * (idx + half_step)];
+        if (threadIdx.x == 0) {
+            atomicAdd(&d_out[i], shared[i + bin_count * threadIdx.x] + shared[i + bin_count * (threadIdx.x + half_step)]);
         }
     }
 }
