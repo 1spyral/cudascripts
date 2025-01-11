@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <math.h>
 
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
@@ -11,6 +12,51 @@ __global__ void histogramAtomicKernel(int* d_out, int* d_in, int min, int max, s
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < size) {
         atomicAdd(&d_out[findBin(min, max, bin_count, d_in[idx])], 1);
+    }
+}
+
+// first implement for 1024 threads max
+__global__ void histogramReductionKernel(int* d_out, int* d_in, int min, int max, size_t bin_count, size_t size, size_t load) {
+    extern __shared__ int shared[];
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < size) {
+        for (int i = 0; i < bin_count; i++) {
+            shared[i + bin_count * idx] = 0;
+        }
+    }
+
+    if (idx < size) {
+        for (int i = idx * load; i < (idx + 1) * load && i < size; i++) {
+            shared[findBin(min, max, bin_count, d_in[i]) + bin_count * idx] += 1;
+        }
+    }
+
+    size_t threads = (size + load - 1) / load;
+
+    size_t steps = ceil(log2f(threads));
+    
+    for (int i = 0; i < bin_count; i++) {
+        if (steps == 0) {
+            d_out[i] = shared[i + bin_count * idx];
+            return;
+        }
+        int step = 2;
+        int half_step = 1;
+
+        __syncthreads();
+        for (int j = 1; j < steps; j++) {
+            if ((idx & (step - 1)) == 0) {
+                shared[i + bin_count * idx] += shared[i + bin_count * (idx + half_step)];
+            }
+            step <<= 1;
+            half_step <<= 1;
+            __syncthreads();
+        }
+        if (idx == 0) {
+            d_out[i] += shared[i + bin_count * idx] + shared[i + bin_count * (idx + half_step)];
+        }
     }
 }
 
@@ -51,6 +97,62 @@ Exit:
     return cudaStatus;
 }
 
+cudaError_t histogramReductionParallel(int* out, int* in, int min, int max, size_t bin_count, size_t size, size_t load = 10) {
+    cudaError_t cudaStatus;
+
+    int* d_out;
+    int* d_in;
+
+    size_t threads = (size + load - 1) / load;
+
+    dim3 gridDim((threads + MAX_PER_BLOCK - 1) / MAX_PER_BLOCK);
+    dim3 blockDim(gridDim.x > 1 ? MAX_PER_BLOCK: threads);
+    size_t sharedMem(bin_count * threads * sizeof(int));
+
+    cudaStatus = cudaMalloc(&d_out, bin_count * sizeof(int));
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed!");
+        goto Exit;
+    }
+    cudaStatus = cudaMalloc(&d_in, size * sizeof(int));
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed!");
+        goto Exit;
+    }
+
+    cudaStatus = cudaMemset(d_out, 0, bin_count * sizeof(int));
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMemset failed!");
+        goto Exit;
+    }
+    cudaStatus = cudaMemcpy(d_in, in, size * sizeof(int), cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMemcpy failed!");
+        goto Exit;
+    }
+
+    histogramReductionKernel<<<gridDim, blockDim, sharedMem>>>(d_out, d_in, min, max, bin_count, size, load);
+
+    cudaStatus = cudaGetLastError();
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "histogramReductionKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        goto Exit;
+    }
+
+    cudaStatus = cudaDeviceSynchronize();
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaDeviceSynchronize returned error code %d: %s\n", cudaStatus, cudaGetErrorString(cudaStatus));
+        goto Exit;
+    }
+
+    cudaStatus = cudaMemcpy(out, d_out, bin_count * sizeof(int), cudaMemcpyDeviceToHost);
+
+Exit:
+    cudaFree(d_out);
+    cudaFree(d_in);
+    return cudaStatus;
+}
+
 inline __device__ int findBin(int min, int max, size_t bin_count, int val) {
     return ((float)val - min) / ((float)max - min) * bin_count;
 }
@@ -66,6 +168,21 @@ int main() {
 	int out[bin_count];
 	printArray(in, size);
 	histogramAtomicParallel(out, in, min, max, bin_count, size);
+	printArray(out, bin_count);
+}
+*/
+
+/*
+int main() {
+	int min = 5;
+	int max = 15;
+	int bin_count = 5;
+	int size = 10;
+
+	int in[] = { 6, 7, 8, 8, 9, 14, 10, 8, 5, 6 };
+	int out[bin_count];
+	printArray(in, size);
+	histogramReductionParallel(out, in, min, max, bin_count, size, 2);
 	printArray(out, bin_count);
 }
 */
